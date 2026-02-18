@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Concept - Minuteur</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    html,body{background:#000;height:100%;width:100%;overflow:hidden;position:fixed;touch-action:none;}
+    body{display:flex;flex-direction:column;justify-content:center;align-items:center;font-family:'Courier New',monospace;}
+    #selection{display:flex;flex-direction:column;align-items:center;gap:15px;z-index:10;width:100%;padding:20px;}
+    h1{font-size:1.2em;opacity:.7;font-weight:normal;color:#fff;text-align:center;margin-bottom:10px;}
+    .durations{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+    .duration-btn{background:transparent;border:2px solid #fff;color:#fff;padding:12px 18px;font-size:1em;cursor:pointer;border-radius:20px;min-width:60px;touch-action:manipulation;}
+    .duration-btn:active{background:#fff;color:#000;}
+    #fullscreenBtn,#testSoundBtn{background:transparent;border:1px solid rgba(255,255,255,.5);color:rgba(255,255,255,.7);padding:10px 18px;font-size:1em;cursor:pointer;border-radius:18px;touch-action:manipulation;}
+    #fullscreenBtn:active,#testSoundBtn:active{border-color:#fff;color:#fff;}
+    #soundTestPanel{display:none;background:rgba(255,255,255,.05);padding:15px;border-radius:12px;margin-top:10px;border:1px solid rgba(255,255,255,.2);width:90%;max-width:350px;}
+    .slider-row{display:flex;align-items:center;margin:12px 0;gap:8px;}
+    .slider-label{color:#fff;font-size:.8em;width:110px;text-align:left;opacity:.9;}
+    input[type="range"]{-webkit-appearance:none;flex:1;height:4px;background:rgba(255,255,255,.2);border-radius:2px;outline:none;}
+    input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;background:#fff;border-radius:50%;cursor:pointer;}
+    .slider-value{color:#fff;font-size:.8em;width:35px;text-align:right;}
+    #timer{display:none;position:relative;z-index:10;width:100%;text-align:center;}
+    #timeDisplay{font-size:20vw;font-weight:300;letter-spacing:.05em;color:#fff;user-select:none;line-height:1;}
+    .back-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:transparent;border:1px solid #fff;color:#fff;padding:12px 25px;cursor:pointer;opacity:.5;border-radius:20px;font-size:.9em;display:none;touch-action:manipulation;}
+    .back-btn:active{opacity:1;}
+    .playing-indicator{display:inline-block;width:6px;height:6px;background:#0f0;border-radius:50%;margin-left:6px;animation:pulse 1s infinite;}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+  </style>
+</head>
+<body>
+  <div id="selection">
+    <h1>Choisir la durée</h1>
+    <div class="durations">
+      <button class="duration-btn" data-seconds="30">30s</button>
+      <button class="duration-btn" data-seconds="300">5 min</button>
+      <button class="duration-btn" data-seconds="900">15 min</button>
+      <button class="duration-btn" data-seconds="1800">30 min</button>
+      <button class="duration-btn" data-seconds="3600">1 h</button>
+    </div>
+
+    <div style="display:flex;gap:10px;">
+      <button id="fullscreenBtn">⛶</button>
+      <button id="testSoundBtn">🎵 <span id="soundIndicator"></span></button>
+    </div>
+
+    <div id="soundTestPanel">
+      <div class="slider-row">
+        <span class="slider-label">Bruit blanc</span>
+        <input type="range" id="whiteSlider" min="0" max="100" value="0">
+        <span class="slider-value" id="whiteValue">0%</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">Onde 396 Hz</span>
+        <input type="range" id="droneSlider" min="0" max="100" value="0">
+        <span class="slider-value" id="droneValue">0%</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">Pluie</span>
+        <input type="range" id="rainSlider" min="0" max="100" value="50">
+        <span class="slider-value" id="rainValue">50%</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="timer">
+    <span id="timeDisplay">00:00</span>
+  </div>
+
+  <button class="back-btn" id="resetBtn">Retour</button>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // =============================
+      // Helpers safe
+      // =============================
+      const DEBUG = false;
+      const log = (...a) => { if (DEBUG) console.log(...a); };
+      const safe = (fn) => { try { fn(); } catch(e){ if(DEBUG) console.error(e); } };
+      const on = (el, evt, fn, opts) => { if (!el) return; el.addEventListener(evt, fn, opts); };
+
+      // Debug hard (optionnel)
+      window.addEventListener('error', (e) => {
+        console.error('[JS ERROR]', e.message, e.filename, e.lineno, e.colno);
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        console.error('[PROMISE ERROR]', e.reason);
+      });
+
+      // =============================
+      // DOM
+      // =============================
+      const selection = document.getElementById('selection');
+      const timer = document.getElementById('timer');
+      const timeDisplay = document.getElementById('timeDisplay');
+      const resetBtn = document.getElementById('resetBtn');
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
+      const testSoundBtn = document.getElementById('testSoundBtn');
+      const soundTestPanel = document.getElementById('soundTestPanel');
+      const soundIndicator = document.getElementById('soundIndicator');
+
+      const whiteSlider = document.getElementById('whiteSlider');
+      const droneSlider = document.getElementById('droneSlider');
+      const rainSlider  = document.getElementById('rainSlider');
+
+      const whiteValue = document.getElementById('whiteValue');
+      const droneValue = document.getElementById('droneValue');
+      const rainValue  = document.getElementById('rainValue');
+
+      // =============================
+      // State machine
+      // =============================
+      const Mode = Object.freeze({ HOME:'home', SOUND_TEST:'soundTest', RUNNING:'running', FINISHED:'finished' });
+      let mode = Mode.HOME;
+
+      // Timer internals
+      let startDelayTimeout = null;
+      let tickInterval = null;
+      let endAtMs = 0;
+      let lastSec = null;
+
+      // Neon
+      let neonRaf = null;
+
+      // Swipe
+      let touchStartY = 0;
+
+      // Levels [0..1]
+      let whiteLevel = 0;
+      let droneLevel = 0;
+      let rainLevel  = 0.5;
+
+      function clamp01(x){ return Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0)); }
+
+      function formatTime(sec){
+        sec = Math.max(0, Math.floor(sec));
+        const h = Math.floor(sec/3600);
+        const m = Math.floor((sec%3600)/60);
+        const s = sec%60;
+        if (h>0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      }
+
+      // =============================
+      // Storage
+      // =============================
+      function saveToStorage(){
+        safe(() => {
+          localStorage.setItem('concept_white', String(whiteLevel));
+          localStorage.setItem('concept_drone', String(droneLevel));
+          localStorage.setItem('concept_rain',  String(rainLevel));
+        });
+      }
+
+      function loadFromStorage(){
+        safe(() => {
+          const w = localStorage.getItem('concept_white');
+          const d = localStorage.getItem('concept_drone');
+          const r = localStorage.getItem('concept_rain');
+          if (w!==null) whiteLevel = clamp01(parseFloat(w));
+          if (d!==null) droneLevel = clamp01(parseFloat(d));
+          if (r!==null) rainLevel  = clamp01(parseFloat(r));
+        });
+      }
+
+      function updateSliderDisplay(){
+        if (whiteValue) whiteValue.textContent = Math.round(whiteLevel*100) + '%';
+        if (droneValue) droneValue.textContent = Math.round(droneLevel*100) + '%';
+        if (rainValue)  rainValue.textContent  = Math.round(rainLevel*100)  + '%';
+      }
+
+      function applyValuesToSliders(){
+        if (whiteSlider) whiteSlider.value = String(Math.round(whiteLevel*100));
+        if (droneSlider) droneSlider.value = String(Math.round(droneLevel*100));
+        if (rainSlider)  rainSlider.value  = String(Math.round(rainLevel*100));
+        updateSliderDisplay();
+      }
+
+      // =============================
+      // Neon
+      // =============================
+      function updateNeon(intensity){
+        if (!timeDisplay) return;
+        if (intensity<=0){ timeDisplay.style.textShadow='none'; return; }
+        const blur1 = 2 + intensity*8;
+        const blur2 = 5 + intensity*15;
+        const alpha1= 0.3 + intensity*0.7;
+        const alpha2= 0.2 + intensity*0.5;
+        timeDisplay.style.textShadow =
+          `0 0 ${blur1}px rgba(255,255,255,${alpha1}), 0 0 ${blur2}px rgba(255,255,255,${alpha2})`;
+      }
+
+      function cancelNeon(){
+        if (neonRaf){ cancelAnimationFrame(neonRaf); neonRaf=null; }
+      }
+
+      function animateNeon(from,to,durationMs){
+        cancelNeon();
+        const start = performance.now();
+        const step = (t)=>{
+          const p = Math.min((t-start)/durationMs, 1);
+          updateNeon(from + (to-from)*p);
+          if (p<1) neonRaf = requestAnimationFrame(step);
+          else neonRaf=null;
+        };
+        neonRaf = requestAnimationFrame(step);
+      }
+
+      // =============================
+      // Audio engine (stable)
+      // =============================
+      let audioCtx = null;
+      let audioUnlocked = false;
+
+      let whiteBuffer = null;
+      let rainBuffer = null;
+
+      const audio = {
+        white: { source:null, gain:null, nodes:[] },
+        rain:  { source:null, gain:null, nodes:[] },
+        drone: { osc:null, lfo:null, gain:null, nodes:[] }
+      };
+
+      function ensureAudio(){
+        if (audioUnlocked && audioCtx) return;
+        safe(() => {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          audioCtx = audioCtx || new AudioContext();
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+          audioUnlocked = true;
+        });
+      }
+
+      function buildWhiteBuffer(){
+        if (!audioCtx) return null;
+        if (whiteBuffer) return whiteBuffer;
+        const bufferSize = audioCtx.sampleRate * 2;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+        whiteBuffer = buffer;
+        return buffer;
+      }
+
+      function buildRainBuffer(){
+        if (!audioCtx) return null;
+        if (rainBuffer) return rainBuffer;
+        const bufferSize = audioCtx.sampleRate * 2;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+        for (let i=0;i<bufferSize;i++){
+          const w = Math.random()*2-1;
+          b0 = 0.99886*b0 + w*0.0555179;
+          b1 = 0.99332*b1 + w*0.0750759;
+          b2 = 0.96900*b2 + w*0.1538520;
+          b3 = 0.86650*b3 + w*0.3104856;
+          b4 = 0.55000*b4 + w*0.5329522;
+          b5 = -0.7616*b5 - w*0.0168980;
+          data[i] = b0+b1+b2+b3+b4+b5+b6 + w*0.5362;
+          data[i] *= 0.11;
+          b6 = w * 0.115926;
+        }
+        rainBuffer = buffer;
+        return buffer;
+      }
+
+      function stopLayer(layer){
+        safe(() => {
+          if (layer.source){ layer.source.stop(0); layer.source.disconnect(); layer.source=null; }
+          if (layer.osc){ layer.osc.stop(0); layer.osc.disconnect(); layer.osc=null; }
+          if (layer.lfo){ layer.lfo.stop(0); layer.lfo.disconnect(); layer.lfo=null; }
+          (layer.nodes||[]).forEach(n => safe(() => n.disconnect && n.disconnect()));
+          layer.nodes = [];
+          if (layer.gain){ layer.gain.disconnect(); layer.gain=null; }
+        });
+      }
+
+      function stopAllAudio(){
+        stopLayer(audio.white);
+        stopLayer(audio.rain);
+        stopLayer(audio.drone);
+      }
+
+      function startOrUpdateSoundTestAudio(){
+        if (!audioCtx || !audioUnlocked) return;
+        if (audioCtx.state === 'suspended') safe(() => audioCtx.resume());
+
+        // WHITE
+        if (whiteLevel > 0){
+          if (!audio.white.source){
+            const buf = buildWhiteBuffer();
+            if (buf){
+              const src = audioCtx.createBufferSource();
+              src.buffer = buf; src.loop = true;
+
+              const filter = audioCtx.createBiquadFilter();
+              filter.type = 'lowpass'; filter.frequency.value = 400;
+
+              const gain = audioCtx.createGain();
+              gain.gain.value = whiteLevel * 0.24;
+
+              src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+              src.start();
+
+              audio.white.source = src;
+              audio.white.gain = gain;
+              audio.white.nodes = [filter];
+            }
+          } else if (audio.white.gain) {
+            audio.white.gain.gain.value = whiteLevel * 0.24;
+          }
+        } else {
+          stopLayer(audio.white);
+        }
+
+        // DRONE
+        if (droneLevel > 0){
+          if (!audio.drone.osc){
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sine'; osc.frequency.value = 396;
+
+            const gain = audioCtx.createGain();
+            gain.gain.value = droneLevel * 0.2;
+
+            const lfo = audioCtx.createOscillator();
+            lfo.frequency.value = 0.1;
+            const lfoGain = audioCtx.createGain();
+            lfoGain.gain.value = 30;
+
+            lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+
+            lfo.start(); osc.start();
+
+            audio.drone.osc = osc;
+            audio.drone.lfo = lfo;
+            audio.drone.gain = gain;
+            audio.drone.nodes = [lfoGain];
+          } else if (audio.drone.gain) {
+            audio.drone.gain.gain.value = droneLevel * 0.2;
+          }
+        } else {
+          stopLayer(audio.drone);
+        }
+
+        // RAIN
+        if (rainLevel > 0){
+          if (!audio.rain.source){
+            const buf = buildRainBuffer();
+            if (buf){
+              const src = audioCtx.createBufferSource();
+              src.buffer = buf; src.loop = true;
+
+              const filter = audioCtx.createBiquadFilter();
+              filter.type = 'lowpass'; filter.frequency.value = 800;
+
+              const gain = audioCtx.createGain();
+              gain.gain.value = rainLevel * 0.15;
+
+              src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+              src.start();
+
+              audio.rain.source = src;
+              audio.rain.gain = gain;
+              audio.rain.nodes = [filter];
+            }
+          } else if (audio.rain.gain) {
+            audio.rain.gain.gain.value = rainLevel * 0.15;
+          }
+        } else {
+          stopLayer(audio.rain);
+        }
+      }
+
+      function playEndRamp(){
+        if (!audioCtx || !audioUnlocked) return;
+        if (audioCtx.state === 'suspended') safe(() => audioCtx.resume());
+        const now = audioCtx.currentTime;
+
+        stopAllAudio();
+
+        // White ramp
+        if (whiteLevel > 0){
+          const buf = buildWhiteBuffer();
+          if (buf){
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf; src.loop = true;
+
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0;
+            gain.gain.linearRampToValueAtTime(whiteLevel * 0.24, now + 3);
+
+            src.connect(gain); gain.connect(audioCtx.destination);
+            src.start();
+
+            audio.white.source = src;
+            audio.white.gain = gain;
+          }
+        }
+
+        // Drone ramp
+        if (droneLevel > 0){
+          const osc = audioCtx.createOscillator();
+          osc.type = 'sine'; osc.frequency.value = 396;
+
+          const gain = audioCtx.createGain();
+          gain.gain.value = 0;
+          gain.gain.linearRampToValueAtTime(droneLevel * 0.2, now + 4);
+
+          osc.connect(gain); gain.connect(audioCtx.destination);
+          osc.start();
+
+          audio.drone.osc = osc;
+          audio.drone.gain = gain;
+        }
+
+        // Rain ramp
+        if (rainLevel > 0){
+          const buf = buildRainBuffer();
+          if (buf){
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf; src.loop = true;
+
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0;
+            gain.gain.linearRampToValueAtTime(rainLevel * 0.15, now + 5);
+
+            src.connect(gain); gain.connect(audioCtx.destination);
+            src.start();
+
+            audio.rain.source = src;
+            audio.rain.gain = gain;
+          }
+        }
+      }
+
+// =============================
+// Fullscreen (toggle + icône)
+// =============================
+function isFullscreenNow(){
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    (typeof document.webkitIsFullScreen === 'boolean' && document.webkitIsFullScreen)
+  );
+}
+
+function updateFullscreenIcon(){
+  if (!fullscreenBtn) return;
+  fullscreenBtn.textContent = isFullscreenNow() ? '✕' : '⛶';
+}
+
+function goFullscreen(){
+  ensureAudio();
+
+  const elem = document.documentElement;
+  const isFs = isFullscreenNow();
+
+  safe(() => {
+    if (!isFs) {
+      if (elem.requestFullscreen) return elem.requestFullscreen().catch(()=>{});
+      if (elem.webkitRequestFullscreen) return elem.webkitRequestFullscreen();
+      if (elem.msRequestFullscreen) return elem.msRequestFullscreen();
+    } else {
+      if (document.exitFullscreen) return document.exitFullscreen().catch(()=>{});
+      if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
+      if (document.msExitFullscreen) return document.msExitFullscreen();
+    }
+  });
+}
+
+document.addEventListener('fullscreenchange', updateFullscreenIcon);
+document.addEventListener('webkitfullscreenchange', updateFullscreenIcon);
+updateFullscreenIcon();
+
+      // =============================
+      // WakeLock (proper-ish)
+      // =============================
+      let wakeLock = null;
+
+      async function requestWakeLock(){
+        if (!('wakeLock' in navigator)) return;
+        try{
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => { wakeLock = null; });
+        }catch(e){
+          if (DEBUG) console.error(e);
+        }
+      }
+
+      async function releaseWakeLock(){
+        try{ if (wakeLock) await wakeLock.release(); }catch(e){}
+        wakeLock = null;
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && mode === Mode.RUNNING) requestWakeLock();
+      });
+
+      // =============================
+      // Modes
+      // =============================
+      function stopTimerInternals(){
+        if (startDelayTimeout){ clearTimeout(startDelayTimeout); startDelayTimeout=null; }
+        if (tickInterval){ clearInterval(tickInterval); tickInterval=null; }
+        cancelNeon();
+        endAtMs = 0;
+        lastSec = null;
+        stopAllAudio();
+      }
+
+      function setMode(next){
+        if (mode === next) return;
+        log('mode', mode, '->', next);
+
+        // Exit old
+        if (mode === Mode.SOUND_TEST) stopAllAudio();
+        if (mode === Mode.RUNNING || mode === Mode.FINISHED){
+          stopTimerInternals();
+          releaseWakeLock();
+        }
+
+        mode = next;
+
+        if (mode === Mode.HOME){
+          if (selection) selection.style.display = 'flex';
+          if (timer) timer.style.display = 'none';
+          if (resetBtn) resetBtn.style.display = 'none';
+          if (soundTestPanel) soundTestPanel.style.display = 'none';
+          if (soundIndicator) soundIndicator.classList.remove('playing-indicator');
+          if (timeDisplay) timeDisplay.textContent = '00:00';
+          updateNeon(0);
+        }
+
+        if (mode === Mode.SOUND_TEST){
+          if (selection) selection.style.display = 'flex';
+          if (timer) timer.style.display = 'none';
+          if (resetBtn) resetBtn.style.display = 'none';
+          if (soundTestPanel) soundTestPanel.style.display = 'block';
+          if (soundIndicator) soundIndicator.classList.add('playing-indicator');
+          if (timeDisplay) timeDisplay.textContent = '00:00';
+          updateNeon(0);
+          startOrUpdateSoundTestAudio();
+        }
+
+        if (mode === Mode.RUNNING){
+          if (selection) selection.style.display = 'none';
+          if (timer) timer.style.display = 'block';
+          if (resetBtn) resetBtn.style.display = 'none';
+          if (soundTestPanel) soundTestPanel.style.display = 'none';
+          if (soundIndicator) soundIndicator.classList.remove('playing-indicator');
+        }
+
+        if (mode === Mode.FINISHED){
+          if (selection) selection.style.display = 'none';
+          if (timer) timer.style.display = 'block';
+          if (resetBtn) resetBtn.style.display = 'block';
+          if (soundTestPanel) soundTestPanel.style.display = 'none';
+          if (soundIndicator) soundIndicator.classList.remove('playing-indicator');
+        }
+      }
+
+      // =============================
+      // Timer
+      // =============================
+      function startTimer(seconds){
+        stopTimerInternals();
+        ensureAudio();
+        setMode(Mode.RUNNING);
+
+        if (timeDisplay) timeDisplay.textContent = formatTime(seconds);
+
+        animateNeon(0.8, 0, 10000);
+        requestWakeLock();
+
+        startDelayTimeout = setTimeout(() => {
+          startDelayTimeout = null;
+
+          endAtMs = Date.now() + seconds * 1000;
+
+          tick();
+          tickInterval = setInterval(tick, 250);
+        }, 10000);
+
+        function tick(){
+          const msLeft = endAtMs - Date.now();
+          const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
+
+          if (secLeft !== lastSec){
+            lastSec = secLeft;
+            if (timeDisplay) timeDisplay.textContent = formatTime(secLeft);
+          }
+
+          if (secLeft <= 0){
+            stopTimerInternals();
+            endTimer();
+          }
+        }
+      }
+
+      function endTimer(){
+        setMode(Mode.FINISHED);
+        if (timeDisplay) timeDisplay.textContent = '00:00';
+        animateNeon(0.01, 2, 10000);
+        playEndRamp();
+        releaseWakeLock();
+      }
+
+      function returnToHome(){
+        stopTimerInternals();
+        setMode(Mode.HOME);
+      }
+
+      function toggleSoundTest(){
+        ensureAudio();
+        if (mode === Mode.SOUND_TEST) setMode(Mode.HOME);
+        else setMode(Mode.SOUND_TEST);
+      }
+
+      // =============================
+      // Events (delegation)
+      // =============================
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.duration-btn');
+        if (btn){
+          const seconds = parseInt(btn.getAttribute('data-seconds'), 10);
+          if (Number.isFinite(seconds)) startTimer(seconds);
+          return;
+        }
+      });
+
+      on(fullscreenBtn, 'click', goFullscreen);
+      on(testSoundBtn, 'click', toggleSoundTest);
+      on(resetBtn, 'click', returnToHome);
+
+      function onSliderChange(){
+        if (whiteSlider) whiteLevel = clamp01(parseInt(whiteSlider.value, 10)/100);
+        if (droneSlider) droneLevel = clamp01(parseInt(droneSlider.value, 10)/100);
+        if (rainSlider)  rainLevel  = clamp01(parseInt(rainSlider.value, 10)/100);
+
+        updateSliderDisplay();
+        saveToStorage();
+
+        if (mode === Mode.SOUND_TEST) startOrUpdateSoundTestAudio();
+      }
+
+      on(whiteSlider, 'input', onSliderChange);
+      on(droneSlider, 'input', onSliderChange);
+      on(rainSlider,  'input', onSliderChange);
+
+      // Swipe down (ignore sliders/panel)
+      on(document, 'touchstart', (e) => {
+        touchStartY = e.touches[0].clientY;
+      }, { passive: true });
+
+      on(document, 'touchend', (e) => {
+        const target = e.target;
+        const isRange = target && target.tagName === 'INPUT' && target.type === 'range';
+        const insidePanel = target && soundTestPanel && soundTestPanel.contains(target);
+        if (isRange || insidePanel) return;
+        if (!(mode === Mode.RUNNING || mode === Mode.FINISHED)) return;
+
+        const diff = e.changedTouches[0].clientY - touchStartY;
+        if (diff > 150) returnToHome();
+      }, { passive: true });
+
+      // Keyboard
+      on(document, 'keydown', (e) => {
+        if (e.key === 'Backspace' && (mode === Mode.RUNNING || mode === Mode.FINISHED)){
+          e.preventDefault();
+          returnToHome();
+        }
+        if (e.key === ' ' && mode === Mode.FINISHED){
+          e.preventDefault();
+          returnToHome();
+        }
+      });
+
+      // =============================
+      // Init
+      // =============================
+      loadFromStorage();
+      applyValuesToSliders();
+      setMode(Mode.HOME);
+    });
+  </script>
+</body>
+</html>
